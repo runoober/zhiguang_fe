@@ -1,22 +1,76 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import AppLayout from "@/components/layout/AppLayout";
 import MainHeader from "@/components/layout/MainHeader";
 import SectionHeader from "@/components/common/SectionHeader";
-import { mockContents } from "@/data/content";
 import AuthStatus from "@/features/auth/AuthStatus";
 import { useAuth } from "@/context/AuthContext";
 import styles from "./ProfilePage.module.css";
+import feedStyles from "./HomePage.module.css";
+import CourseCard from "@/components/cards/CourseCard";
+import { knowpostService } from "@/services/knowpostService";
 
 const ProfilePage = () => {
-  const { user } = useAuth();
+  const { user, tokens } = useAuth();
   const displayName = user?.nickname ?? user?.phone ?? user?.email ?? "知光用户";
   const avatarInitial = displayName.trim().charAt(0) || "知";
 
-  const myContents = useMemo(
-    () => mockContents.filter(item => item.mentor.id === "kana"),
-    []
-  );
+  // 领域标签展示：仅解析 tagJson
+  const tags = useMemo(() => {
+    if (user && typeof user.tagJson === "string") {
+      try {
+        const parsed = JSON.parse(user.tagJson);
+        return Array.isArray(parsed)
+          ? parsed.filter((t) => typeof t === "string")
+          : [];
+      } catch {
+        return [];
+      }
+    }
+    return [];
+  }, [user]);
+
+
+  // 我的知文列表数据
+  const [items, setItems] = useState<Array<{
+    id: string;
+    title: string;
+    description: string;
+    coverImage?: string;
+    tags: string[];
+    tagJson?: string;
+    authorAvatar?: string;
+    authorAvator?: string;
+    authorNickname: string;
+  }>>([]);
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(true);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const run = async () => {
+      if (!tokens?.accessToken) return; // 未登录不请求
+      setLoading(true);
+      setError(null);
+      try {
+        const resp = await knowpostService.mine(1, 20, tokens.accessToken);
+        if (!cancelled) {
+          setItems(resp.items ?? []);
+          setHasMore(!!resp.hasMore);
+          setPage(resp.page ?? 1);
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "加载失败";
+        if (!cancelled) setError(msg);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+    run();
+    return () => { cancelled = true; };
+  }, [tokens?.accessToken]);
 
   return (
     <AppLayout
@@ -45,8 +99,8 @@ const ProfilePage = () => {
           <div className={styles.infoBox}>
             <div className={styles.nickname}>{displayName}</div>
             <div className={styles.tags}>
-              {user?.skills && user.skills.length > 0 ? (
-                user.skills.map(tag => <span key={tag}>{tag}</span>)
+              {tags.length > 0 ? (
+                tags.map(tag => <span key={tag}>{tag}</span>)
               ) : (
                 <span>未设置</span>
               )}
@@ -55,25 +109,38 @@ const ProfilePage = () => {
         </div>
         <div className={styles.bioBlock}>{user?.bio ?? "暂无简介"}</div>
 
-        <SectionHeader title="我的内容" subtitle="管理你的作品，了解互动和数据" />
-        <ul className={styles.contentList}>
-          {myContents.map(item => (
-            <li key={item.id} className={styles.contentItem}>
-              <div className={styles.contentMeta}>
-                <Link to={`/course/${item.id}`} className={styles.contentTitle}>{item.title}</Link>
-                <div className={styles.contentStats}>
-                  <span>👁️ {item.views} 次浏览</span>
-                  <span>🛒 0 次购买</span>
-                  <span>👍 {item.likes} 次点赞</span>
-                </div>
+        <SectionHeader title="我的知文" subtitle="仅显示你已发布的知文" />
+        {error ? <div style={{ color: "var(--color-danger)" }}>{error}</div> : null}
+        {!user ? (
+          <div style={{ color: "var(--color-text-muted)", padding: 12 }}>请登录后查看你的知文</div>
+        ) : (
+          <div className={feedStyles.masonry}>
+            {items.map(item => (
+              <div key={item.id} className={feedStyles.masonryItem}>
+                <CourseCard
+                  id={item.id}
+                  title={item.title}
+                  summary={item.description ?? ""}
+                  tags={item.tags ?? []}
+                  authorTags={(() => {
+                    try {
+                      return item.tagJson ? (JSON.parse(item.tagJson) as unknown[]).filter((t) => typeof t === "string") as string[] : [];
+                    } catch {
+                      return [];
+                    }
+                  })()}
+                  teacher={{ name: item.authorNickname, avatarUrl: item.authorAvatar ?? item.authorAvator }}
+                  coverImage={item.coverImage}
+                  to={`/post/${item.id}`}
+                />
               </div>
-              <div className={styles.contentActions}>
-                <button type="button" className={styles.smallButton}>编辑</button>
-                <button type="button" className={`${styles.smallButton} ${styles.danger}`}>删除</button>
-              </div>
-            </li>
-          ))}
-        </ul>
+            ))}
+            {loading ? <div className={feedStyles.masonryItem}><div>加载中…</div></div> : null}
+            {!loading && items.length === 0 ? (
+              <div className={feedStyles.masonryItem}><div>暂无内容</div></div>
+            ) : null}
+          </div>
+        )}
       </>
     </AppLayout>
   );
